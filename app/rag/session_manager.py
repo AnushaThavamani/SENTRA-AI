@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -40,8 +41,30 @@ class SessionRAGManager:
         self._processor = processor or PDFProcessor()
         self._retrievers: dict[str, Retriever] = {}
 
+    def cleanup_orphaned_sessions(self) -> None:
+        """Remove sessions older than session_ttl_hours to prevent state drift."""
+        if not self.settings.session_root.exists():
+            return
+        now = time.time()
+        ttl_seconds = self.settings.session_ttl_hours * 3600
+        for session_dir in self.settings.session_root.iterdir():
+            if not session_dir.is_dir():
+                continue
+            try:
+                UUID(session_dir.name)
+            except ValueError:
+                continue
+            
+            # Use the directory modification time to check age
+            if now - session_dir.stat().st_mtime > ttl_seconds:
+                try:
+                    self.delete_session(session_dir.name)
+                except Exception:
+                    pass
+
     def create_session(self) -> str:
         """Create and return a new opaque session ID and storage directory."""
+        self.cleanup_orphaned_sessions()
         session_id = str(uuid4())
         session_dir = self._session_dir(session_id)
         (session_dir / "uploads").mkdir(parents=True)
@@ -90,7 +113,8 @@ class SessionRAGManager:
         retriever = self._retrievers.get(session_id) or self._load_retriever(session_id)
         results = retriever.retrieve(query, top_k or self.settings.default_top_k)
         # A defensive invariant: never return data that is not tagged with this session.
-        return [result for result in results if result["session_id"] == session_id]
+        return [result for result in results
+                if result["session_id"] == session_id and result["score"] >= self.settings.relevance_threshold]
 
     def delete_session(self, session_id: str) -> None:
         """Delete one validated session's uploads, FAISS index, and metadata."""
@@ -103,6 +127,25 @@ class SessionRAGManager:
     def session_path(self, session_id: str) -> Path:
         """Return a validated session path for diagnostics and tests."""
         return self._session_dir(session_id)
+
+    def session_summary(self, session_id: str) -> dict[str, object]:
+        """Return safe, session-local status information for application views."""
+        session_dir = self._session_dir(session_id)
+        if not session_dir.is_dir():
+            raise KeyError(f"Unknown RAG session: {session_id}")
+        metadata_path = session_dir / "metadata.json"
+        if not metadata_path.is_file():
+            return {"session_id": session_id, "documents": [], "chunk_count": 0, "ready": False}
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        chunks = [Chunk(**item) for item in metadata.get("chunks", [])]
+        if metadata.get("session_id") != session_id or any(chunk.session_id != session_id for chunk in chunks):
+            raise ValueError("Session metadata does not match the requested session.")
+        return {
+            "session_id": session_id,
+            "documents": sorted({chunk.document for chunk in chunks}),
+            "chunk_count": len(chunks),
+            "ready": bool(chunks),
+        }
 
     def _current_chunks(self, session_id: str) -> list[Chunk]:
         if session_id in self._retrievers:
@@ -119,6 +162,8 @@ class SessionRAGManager:
 
     def _load_retriever(self, session_id: str) -> Retriever:
         session_dir = self._session_dir(session_id)
+        if not session_dir.is_dir():
+            raise KeyError(f"Unknown RAG session: {session_id}")
         metadata_path, index_path = session_dir / "metadata.json", session_dir / "faiss.index"
         if not metadata_path.is_file() or not index_path.is_file():
             raise KeyError(f"Session has no searchable index: {session_id}")

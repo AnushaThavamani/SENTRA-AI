@@ -3,6 +3,7 @@ pymupdf
 numpy
 sentence-transformers
 faiss-cpu
+streamlit
 
 # Test runner
 pytest

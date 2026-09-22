@@ -13,6 +13,11 @@ class RAGSettings:
     chunk_size: int = 500
     chunk_overlap: int = 50
     default_top_k: int = 5
+    # Scores are derived from FAISS squared-L2 distances as 1 / (1 + distance).
+    # This is deliberately centralized so applications do not silently use a
+    # different evidence bar from the RAG layer.
+    relevance_threshold: float = 0.20
+    session_ttl_hours: int = 24
 
 
 def get_rag_settings() -> RAGSettings:

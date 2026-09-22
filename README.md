@@ -25,3 +25,46 @@ The legacy RAG implementation was inspected and its PDF extraction, 500-word chu
 ## Step 2B — Session-Specific RAG
 
 User-uploaded PDFs are stored temporarily under `data/sessions/<session_id>/uploads/`. Sentra AI extracts selectable text page by page, creates provenance-preserving chunks, embeds them, and stores each session's vectors in its own FAISS index with separate metadata. Retrieval is restricted to the requested session ID, and `delete_session(session_id)` removes that session's uploads, index, and metadata. This is a retrieval pipeline built from uploaded documents; no model training occurs.
+
+## P1 - Research Agent CLI demo
+
+P1 adds an evidence-only `ResearchAgent`. It takes a required session ID and a question, retrieves only from that session, returns structured answer/evidence/source/page/score data, and reports insufficient evidence instead of guessing.
+
+Install `requirements.txt`, then run the temporary-session demo against selectable-text PDFs:
+
+```powershell
+python main.py --demo .\paper1.pdf .\paper2.pdf --question "What methodology is proposed?"
+```
+
+The command creates a session, ingests the files, prints answer and provenance, and deletes the session before exiting. The first production run may download `sentence-transformers/all-MiniLM-L6-v2`.
+
+## P2 - Streamlit UI
+
+P2 introduces a professional, captivating Streamlit interface for the existing Research Agent, visually establishing the first stage of the future pipeline.
+
+### Running the UI
+
+You can launch the Streamlit UI with the following command:
+
+```powershell
+streamlit run ui/app.py
+```
+
+### Research workflow
+
+The Streamlit UI supports the following interaction flow:
+
+1. **Create session**: Initialize a new, isolated research space.
+2. **Upload PDFs**: Drag and drop your research documents into the workspace.
+3. **Session RAG**: Documents are parsed, chunked, embedded, and indexed for this specific session.
+4. **Research Agent**: Query your knowledge base with specific research questions.
+5. **Evidence-backed answer**: Receive a response grounded in the uploaded text, displaying specific source files and page numbers as evidence.
+
+### Session isolation
+
+Each research session has its own temporary, isolated knowledge base. Only documents uploaded to a specific research session are available to the Research Agent within that session. Deleting the session clears its uploads, index, and evidence history entirely.
+
+### Current Limitations & Future Work
+
+*   **Session State Drift:** If the Streamlit UI tab is refreshed or closed without explicitly deleting the session, the browser loses track of the `session_id`. To prevent orphaned data from accumulating on disk, the system now implements an automatic Time-To-Live (TTL) cleanup. Any session older than 24 hours is automatically swept and deleted when new sessions are created.
+*   **Storage Backend:** The system currently relies on local filesystem storage (`data/sessions/`). This is ideal for the local Python execution of this MCA project demo. However, if deployed to a hosted cloud environment with multiple concurrent users or scaled horizontally, the storage layer must be abstracted to use a cloud object store (e.g., AWS S3 or Google Cloud Storage) rather than local directories.

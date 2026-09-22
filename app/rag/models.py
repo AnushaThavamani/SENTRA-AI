@@ -35,8 +35,10 @@ class RetrievalResult:
     document_id: str = ""
 
     def as_dict(self) -> dict[str, object]:
-        return {"document": self.document, "filename": self.document, "page": self.page,
+        score = 1.0 / (1.0 + self.distance)
+        return {"document": self.document, "filename": self.document, "source": self.document, "page": self.page,
                 "chunk_id": self.chunk_id, "text": self.text, "distance": self.distance,
+                "score": score,
                 "session_id": self.session_id, "document_id": self.document_id}
 
 
