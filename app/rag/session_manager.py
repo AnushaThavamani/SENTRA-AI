@@ -1,0 +1,142 @@
+"""Lifecycle management for isolated, temporary uploaded-PDF RAG sessions."""
+from __future__ import annotations
+
+import json
+import shutil
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
+from uuid import UUID, uuid4
+
+from app.config.rag import RAGSettings, get_rag_settings
+
+from .chunker import PageChunker
+from .embeddings import SentenceTransformerEmbedder
+from .models import Chunk, ExtractionProblem, ExtractionReport
+from .pdf_processor import PDFProcessor
+from .retriever import Retriever
+from .vector_store import FaissVectorStore
+
+
+@dataclass(frozen=True)
+class SessionIngestionResult:
+    session_id: str
+    chunk_count: int
+    problems: list[ExtractionProblem]
+
+
+class SessionRAGManager:
+    """Create, query, and delete temporary FAISS corpora isolated by session ID.
+
+    The manager never combines indexes or metadata between session directories.
+    A process may reopen a persisted temporary session safely via its own index
+    and metadata files.
+    """
+
+    def __init__(self, *, settings: RAGSettings | None = None, embedder: object | None = None,
+                 processor: PDFProcessor | None = None) -> None:
+        self.settings = settings or get_rag_settings()
+        self.settings.session_root.mkdir(parents=True, exist_ok=True)
+        self._embedder = embedder or SentenceTransformerEmbedder(self.settings.embedding_model)
+        self._processor = processor or PDFProcessor()
+        self._retrievers: dict[str, Retriever] = {}
+
+    def create_session(self) -> str:
+        """Create and return a new opaque session ID and storage directory."""
+        session_id = str(uuid4())
+        session_dir = self._session_dir(session_id)
+        (session_dir / "uploads").mkdir(parents=True)
+        return session_id
+
+    def add_documents(self, session_id: str, files: list[tuple[str, bytes]]) -> SessionIngestionResult:
+        """Ingest one or more uploaded PDF byte streams into one session only."""
+        session_dir = self._session_dir(session_id)
+        uploads_dir = session_dir / "uploads"
+        if not uploads_dir.is_dir():
+            raise KeyError(f"Unknown RAG session: {session_id}")
+        if not files:
+            raise ValueError("At least one uploaded file is required.")
+
+        report = ExtractionReport()
+        new_chunks: list[Chunk] = []
+        chunker = PageChunker(self.settings.chunk_size, self.settings.chunk_overlap)
+        for filename, content in files:
+            display_name = Path(filename).name or "upload.pdf"
+            document_id = str(uuid4())
+            # Retain the original upload only inside its temporary session directory.
+            (uploads_dir / f"{document_id}_{display_name}").write_bytes(content)
+            document_report = self._processor.extract_bytes([(display_name, content)])
+            report.problems.extend(document_report.problems)
+            pages = [replace(page, document_id=document_id) for page in document_report.pages]
+            report.pages.extend(pages)
+            new_chunks.extend(
+                replace(chunk, session_id=session_id, document_id=document_id,
+                        chunk_id=f"{document_id}_{chunk.chunk_id}")
+                for chunk in chunker.chunk_pages(pages)
+            )
+
+        existing_chunks = self._current_chunks(session_id)
+        all_chunks = [*existing_chunks, *new_chunks]
+        if not all_chunks:
+            messages = "; ".join(problem.message for problem in report.problems) or "No extractable PDF text found."
+            raise ValueError(f"No session index was created: {messages}")
+
+        retriever = Retriever.from_chunks(all_chunks, self._embedder)
+        self._retrievers[session_id] = retriever
+        self._persist(session_id, retriever)
+        return SessionIngestionResult(session_id, len(all_chunks), report.problems)
+
+    def retrieve(self, session_id: str, query: str, top_k: int | None = None) -> list[dict[str, object]]:
+        """Search only the FAISS index and metadata associated with ``session_id``."""
+        retriever = self._retrievers.get(session_id) or self._load_retriever(session_id)
+        results = retriever.retrieve(query, top_k or self.settings.default_top_k)
+        # A defensive invariant: never return data that is not tagged with this session.
+        return [result for result in results if result["session_id"] == session_id]
+
+    def delete_session(self, session_id: str) -> None:
+        """Delete one validated session's uploads, FAISS index, and metadata."""
+        session_dir = self._session_dir(session_id)
+        if not session_dir.exists():
+            raise KeyError(f"Unknown RAG session: {session_id}")
+        self._retrievers.pop(session_id, None)
+        shutil.rmtree(session_dir)
+
+    def session_path(self, session_id: str) -> Path:
+        """Return a validated session path for diagnostics and tests."""
+        return self._session_dir(session_id)
+
+    def _current_chunks(self, session_id: str) -> list[Chunk]:
+        if session_id in self._retrievers:
+            return list(self._retrievers[session_id]._vector_store.chunks)
+        index_path = self._session_dir(session_id) / "faiss.index"
+        return list(self._load_retriever(session_id)._vector_store.chunks) if index_path.exists() else []
+
+    def _persist(self, session_id: str, retriever: Retriever) -> None:
+        session_dir = self._session_dir(session_id)
+        vector_store = retriever._vector_store
+        vector_store.save(session_dir / "faiss.index")
+        metadata = {"session_id": session_id, "chunks": [asdict(chunk) for chunk in vector_store.chunks]}
+        (session_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _load_retriever(self, session_id: str) -> Retriever:
+        session_dir = self._session_dir(session_id)
+        metadata_path, index_path = session_dir / "metadata.json", session_dir / "faiss.index"
+        if not metadata_path.is_file() or not index_path.is_file():
+            raise KeyError(f"Session has no searchable index: {session_id}")
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata.get("session_id") != session_id:
+            raise ValueError("Session metadata does not match the requested session.")
+        chunks = [Chunk(**item) for item in metadata.get("chunks", [])]
+        if any(chunk.session_id != session_id for chunk in chunks):
+            raise ValueError("Session metadata contains chunks from another session.")
+        retriever = Retriever(self._embedder, FaissVectorStore.load(index_path, chunks))
+        self._retrievers[session_id] = retriever
+        return retriever
+
+    def _session_dir(self, session_id: str) -> Path:
+        try:
+            normalized = str(UUID(session_id))
+        except (ValueError, AttributeError) as exc:
+            raise ValueError("session_id must be a valid UUID.") from exc
+        if normalized != session_id:
+            raise ValueError("session_id must use canonical UUID form.")
+        return self.settings.session_root / normalized

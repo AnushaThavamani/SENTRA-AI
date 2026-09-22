@@ -1,0 +1,32 @@
+# Python bytecode and tooling
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+pytest-cache-files-*/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and local configuration
+.venv/
+venv/
+.env
+
+# Runtime data and generated artifacts
+generated/*
+!generated/.gitkeep
+uploads/*
+!uploads/.gitkeep
+data/*.pdf
+data/**/*.pdf
+data/sessions/
+
+# Temporary and editor files
+*.tmp
+*.temp
+*.log
+*.bak
+*~
+.DS_Store
+Thumbs.db

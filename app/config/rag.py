@@ -1,0 +1,21 @@
+"""Small, centralized configuration for the temporary RAG session store."""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class RAGSettings:
+    session_root: Path
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    chunk_size: int = 500
+    chunk_overlap: int = 50
+    default_top_k: int = 5
+
+
+def get_rag_settings() -> RAGSettings:
+    project_root = Path(__file__).resolve().parents[2]
+    configured_root = os.getenv("SENTRA_RAG_SESSION_ROOT")
+    return RAGSettings(session_root=Path(configured_root) if configured_root else project_root / "data" / "sessions")
