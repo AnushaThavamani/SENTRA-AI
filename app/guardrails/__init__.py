@@ -1,1 +1,1 @@
-"""Future specification guardrail package."""
+"""Guardrails package."""

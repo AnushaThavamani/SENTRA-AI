@@ -109,7 +109,11 @@ def main() -> None:
         if not status.ready:
             st.markdown('<div class="card"><div class="label">YOUR RESEARCH SPACE IS EMPTY</div><h3>Upload one or more research papers to create your temporary knowledge base.</h3><p class="muted">Documents remain isolated within this research session.</p></div>', unsafe_allow_html=True)
             return
-        query = st.text_area("Ask Research Agent", placeholder="Ask something about your uploaded research papers...", height=105)
+            
+        qa_tab, spec_tab = st.tabs(["Q&A", "ML Specification"])
+        
+        with qa_tab:
+            query = st.text_area("Ask Research Agent", placeholder="Ask something about your uploaded research papers...", height=105)
         st.caption("Examples: What methodology is proposed? · What datasets were used? · What are the main limitations?")
         if st.button("Ask Research Agent", type="primary"):
             if not query.strip():
@@ -127,6 +131,50 @@ def main() -> None:
             with st.expander("RECENT QUESTIONS"):
                 for item in history:
                     st.caption(f"• {item['query']}")
+                    
+        with spec_tab:
+            st.markdown("### Generate ML Specification")
+            st.markdown("Extract a verified ML specification from the papers using the active evidence guardrail.")
+            task_desc = st.text_area(
+                "Target Task / Model Description", 
+                placeholder="e.g. A Vision Transformer for image classification", 
+                height=68
+            )
+            
+            if st.button("Generate Specification", type="primary", use_container_width=True):
+                if not task_desc.strip():
+                    st.warning("Please provide a task description.")
+                else:
+                    with st.spinner("Executing bounded revision loop..."):
+                        spec, gr = service.generate_ml_specification(status.session_id, task_desc)
+                    st.session_state.last_spec = spec
+                    st.session_state.last_guardrail = gr
+            
+            spec = st.session_state.get("last_spec")
+            gr = st.session_state.get("last_guardrail")
+            
+            if spec and gr:
+                st.markdown("---")
+                if gr.passed:
+                    st.success(f"Guardrail PASSED (Attempt {gr.attempt_number}) - Specification is fully supported by evidence.")
+                else:
+                    st.error(f"Guardrail FAILED (Attempt {gr.attempt_number}) - Revision loop exhausted.")
+                    if gr.missing_requirements:
+                        st.warning(f"Missing Requirements: {', '.join(gr.missing_requirements)}")
+                    if gr.unsupported_requirements:
+                        st.warning(f"Unsupported Requirements: {', '.join(gr.unsupported_requirements)}")
+                
+                st.markdown("#### Extracted Specification")
+                for key, item in spec.items.items():
+                    if item.status == "SUPPORTED":
+                        st.success(f"**{item.name}**: {item.value}")
+                        with st.expander("View Evidence"):
+                            st.caption(f"Source: {item.evidence.source} (Page {item.evidence.page})")
+                            st.markdown(f"> {item.evidence.evidence_text}")
+                    elif item.status == "MISSING":
+                        st.warning(f"**{item.name}**: MISSING")
+                    else:
+                        st.error(f"**{item.name}**: UNSUPPORTED ({item.value})")
 
 
 if __name__ == "__main__":
