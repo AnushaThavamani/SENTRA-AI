@@ -1,7 +1,7 @@
 """Bounded corrective retrieval and reconsideration workflow."""
 from __future__ import annotations
 
-from app.agents.models import GuardrailResult, SpecificationResult
+from app.agents.models import GuardrailResult, SpecificationResult, CodeGenerationInput
 from app.agents.research_agent import ResearchAgent
 from app.agents.specification_agent import SpecificationAgent
 from app.guardrails.evidence_guardrail import EvidenceGuardrail
@@ -14,7 +14,7 @@ def run_research_to_spec_workflow(
     spec_agent: SpecificationAgent,
     guardrail: EvidenceGuardrail,
     proposed_overrides: dict[str, str] | None = None
-) -> tuple[SpecificationResult, GuardrailResult]:
+) -> tuple[CodeGenerationInput | None, SpecificationResult, GuardrailResult]:
     """
     Executes the bounded revision loop for ML Specification verification.
     
@@ -24,6 +24,7 @@ def run_research_to_spec_workflow(
     4. If the Guardrail detects missing or unsupported items, executes targeted
        corrective retrieval.
     5. Repeats up to Guardrail.max_attempts.
+    6. If verified, outputs the strict CodeGenerationInput.
     """
     evidence_results = {}
     
@@ -52,7 +53,25 @@ def run_research_to_spec_workflow(
         # Verify Specification against evidence
         guardrail_result = guardrail.validate(spec, attempt_number=attempt)
         
-        if not guardrail_result.revision_required:
+        if guardrail_result.status in ("VERIFIED", "EVIDENCE_UNRESOLVED"):
             break
 
-    return spec, guardrail_result
+    if guardrail_result.status == "VERIFIED":
+        # Create final valid contract
+        # In a real setup, we might also pass `source_documents` 
+        # from the research_workspace or evidence links.
+        source_docs = list({
+            item.evidence.source 
+            for item in spec.items.values() 
+            if item.evidence is not None
+        })
+        
+        code_input = CodeGenerationInput(
+            session_id=session_id,
+            verified_specification=spec,
+            source_documents=source_docs
+        )
+        return code_input, spec, guardrail_result
+
+    return None, spec, guardrail_result
+

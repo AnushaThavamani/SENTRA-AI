@@ -71,7 +71,7 @@ class SpecificationAgent:
                 if not result or not result.sufficient_evidence or not result.evidence:
                     items[domain] = SpecificationRequirement(
                         name=domain,
-                        status="MISSING"
+                        status="MISSING_EVIDENCE"
                     )
                 else:
                     best_ev = result.evidence[0]

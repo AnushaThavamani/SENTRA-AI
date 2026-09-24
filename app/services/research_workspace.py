@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.agents import ResearchAgent, ResearchResult
-from app.agents.models import SpecificationResult, GuardrailResult
+from app.agents.models import SpecificationResult, GuardrailResult, CodeGenerationInput
 from app.agents.specification_agent import SpecificationAgent
 from app.guardrails.evidence_guardrail import EvidenceGuardrail
 from app.orchestration.workflow import run_research_to_spec_workflow
@@ -60,7 +60,7 @@ class ResearchWorkspace:
         session_id: str,
         task_description: str,
         proposed_overrides: dict[str, str] | None = None
-    ) -> tuple[SpecificationResult, GuardrailResult]:
+    ) -> tuple[CodeGenerationInput | None, SpecificationResult, GuardrailResult]:
         """Runs the bounded research-to-specification workflow."""
         return run_research_to_spec_workflow(
             session_id=session_id,

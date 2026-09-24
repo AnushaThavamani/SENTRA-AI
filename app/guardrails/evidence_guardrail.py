@@ -20,18 +20,24 @@ class EvidenceGuardrail:
                 unsupported.append(name)
                 # Formulate a targeted query to look for this specific missing detail
                 actions[name] = f"Find specific evidence for the ML {name} used in the model."
-            elif item.status == "MISSING":
+            elif item.status == "MISSING_EVIDENCE":
                 missing.append(name)
                 actions[name] = f"Find specific evidence for the ML {name} used in the model."
 
         passed = len(unsupported) == 0 and len(missing) == 0
 
         # If it passed or we've exhausted our max attempts, we don't request a revision
-        revision_required = not passed and attempt_number < self.max_attempts
+        if passed:
+            status = "VERIFIED"
+        elif attempt_number < self.max_attempts:
+            status = "REQUIRES_RETRIEVAL"
+        else:
+            status = "EVIDENCE_UNRESOLVED"
+
+        revision_required = status in ("REQUIRES_RETRIEVAL", "REQUIRES_REVISION")
 
         return GuardrailResult(
-            passed=passed,
-            revision_required=revision_required,
+            status=status,
             attempt_number=attempt_number,
             max_attempts=self.max_attempts,
             unsupported_requirements=unsupported,

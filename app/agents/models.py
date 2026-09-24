@@ -15,7 +15,7 @@ class EvidenceLink:
 @dataclass(frozen=True)
 class SpecificationRequirement:
     name: str
-    status: str  # "SUPPORTED", "MISSING", "UNSUPPORTED"
+    status: str  # "SUPPORTED", "MISSING_EVIDENCE", "UNSUPPORTED"
     value: str | None = None
     evidence: EvidenceLink | None = None
 
@@ -29,10 +29,20 @@ class SpecificationResult:
 
 @dataclass(frozen=True)
 class GuardrailResult:
-    passed: bool
-    revision_required: bool
+    status: str  # "DRAFT", "REQUIRES_RETRIEVAL", "REQUIRES_REVISION", "VERIFIED", "EVIDENCE_UNRESOLVED"
     attempt_number: int
     max_attempts: int
     unsupported_requirements: list[str] = field(default_factory=list)
     missing_requirements: list[str] = field(default_factory=list)
     corrective_actions: dict[str, str] = field(default_factory=dict)
+    
+    @property
+    def passed(self) -> bool:
+        return self.status == "VERIFIED"
+
+
+@dataclass(frozen=True)
+class CodeGenerationInput:
+    session_id: str
+    verified_specification: SpecificationResult
+    source_documents: list[str] = field(default_factory=list)

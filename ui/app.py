@@ -146,19 +146,34 @@ def main() -> None:
                     st.warning("Please provide a task description.")
                 else:
                     with st.spinner("Executing bounded revision loop..."):
-                        spec, gr = service.generate_ml_specification(status.session_id, task_desc)
+                        code_input, spec, gr = service.generate_ml_specification(status.session_id, task_desc)
                     st.session_state.last_spec = spec
                     st.session_state.last_guardrail = gr
+                    st.session_state.last_code_input = code_input
             
             spec = st.session_state.get("last_spec")
             gr = st.session_state.get("last_guardrail")
             
             if spec and gr:
                 st.markdown("---")
-                if gr.passed:
+                # Render Progression Tracker
+                st.markdown("#### Pipeline Status")
+                st.markdown("- Research Agent ✓")
+                st.markdown("- ML Specification ✓")
+                if gr.status == "VERIFIED":
+                    st.markdown("- Evidence Verification ✓")
+                    st.markdown("- Code Generation ○ (Next Phase)")
+                    st.markdown("- Testing ○ (Next Phase)")
+                else:
+                    st.markdown("- Evidence Verification ✗ (EVIDENCE UNRESOLVED)")
+                    st.markdown("- Code Generation ✗ (Blocked)")
+                st.markdown("---")
+
+                if gr.status == "VERIFIED":
                     st.success(f"Guardrail PASSED (Attempt {gr.attempt_number}) - Specification is fully supported by evidence.")
                 else:
                     st.error(f"Guardrail FAILED (Attempt {gr.attempt_number}) - Revision loop exhausted.")
+                    st.error("Code generation was not started because the paper did not provide sufficient evidence.")
                     if gr.missing_requirements:
                         st.warning(f"Missing Requirements: {', '.join(gr.missing_requirements)}")
                     if gr.unsupported_requirements:
@@ -171,8 +186,8 @@ def main() -> None:
                         with st.expander("View Evidence"):
                             st.caption(f"Source: {item.evidence.source} (Page {item.evidence.page})")
                             st.markdown(f"> {item.evidence.evidence_text}")
-                    elif item.status == "MISSING":
-                        st.warning(f"**{item.name}**: MISSING")
+                    elif item.status == "MISSING_EVIDENCE":
+                        st.warning(f"**{item.name}**: MISSING EVIDENCE")
                     else:
                         st.error(f"**{item.name}**: UNSUPPORTED ({item.value})")
 

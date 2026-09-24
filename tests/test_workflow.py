@@ -67,7 +67,7 @@ def test_fully_supported_specification(spec_agent, guardrail, session_id):
         
     agent = create_mock_research_agent(responses)
     
-    spec, gr = run_research_to_spec_workflow(
+    code_input, spec, gr = run_research_to_spec_workflow(
         session_id=session_id,
         task_description="Task",
         research_agent=agent,
@@ -75,11 +75,14 @@ def test_fully_supported_specification(spec_agent, guardrail, session_id):
         guardrail=guardrail
     )
     
+    assert gr.status == "VERIFIED"
     assert gr.passed is True
-    assert gr.revision_required is False
+    assert code_input is not None
     assert gr.attempt_number == 1
     assert len(gr.missing_requirements) == 0
     assert len(gr.unsupported_requirements) == 0
+
+    # spec is code_input.verified_specification (and we also get it as second return)
 
     # Test 9: Provenance verification
     assert spec.items["optimizer"].evidence.source == "test.pdf"
@@ -109,7 +112,7 @@ def test_missing_information(spec_agent, guardrail, session_id):
 
     agent = create_mock_research_agent(responses)
     
-    spec, gr = run_research_to_spec_workflow(
+    code_input, spec, gr = run_research_to_spec_workflow(
         session_id=session_id,
         task_description="Task",
         research_agent=agent,
@@ -117,14 +120,15 @@ def test_missing_information(spec_agent, guardrail, session_id):
         guardrail=guardrail
     )
     
+    assert gr.status == "EVIDENCE_UNRESOLVED"
     assert gr.passed is False
-    assert gr.revision_required is False  # False because max attempts exhausted
+    assert code_input is None
     assert gr.attempt_number == 3
     assert "optimizer" in gr.missing_requirements
 
 
-def test_unsupported_invented_parameter(spec_agent, guardrail, session_id):
-    """Test 3: Unsupported invented parameter"""
+def test_hallucination_control(spec_agent, guardrail, session_id):
+    """Test 3: Hallucination control - verify missing parameters do not result in hallucinated defaults."""
     responses = {}
     for domain in spec_agent.ML_DOMAINS:
         query = f"Task {domain}"
@@ -144,7 +148,7 @@ def test_unsupported_invented_parameter(spec_agent, guardrail, session_id):
     # We pass a proposed override that hallucinated the optimizer
     overrides = {"optimizer": "Adam"}
     
-    spec, gr = run_research_to_spec_workflow(
+    code_input, spec, gr = run_research_to_spec_workflow(
         session_id=session_id,
         task_description="Task",
         research_agent=agent,
@@ -153,7 +157,9 @@ def test_unsupported_invented_parameter(spec_agent, guardrail, session_id):
         proposed_overrides=overrides
     )
     
+    assert gr.status == "EVIDENCE_UNRESOLVED"
     assert gr.passed is False
+    assert code_input is None
     assert gr.attempt_number == 3
     assert "optimizer" in gr.unsupported_requirements
     assert spec.items["optimizer"].status == "UNSUPPORTED"
@@ -182,7 +188,7 @@ def test_corrective_retrieval_finds_evidence(spec_agent, guardrail, session_id):
 
     agent = create_mock_research_agent(responses)
     
-    spec, gr = run_research_to_spec_workflow(
+    code_input, spec, gr = run_research_to_spec_workflow(
         session_id=session_id,
         task_description="Task",
         research_agent=agent,
@@ -190,7 +196,9 @@ def test_corrective_retrieval_finds_evidence(spec_agent, guardrail, session_id):
         guardrail=guardrail
     )
     
+    assert gr.status == "VERIFIED"
     assert gr.passed is True
+    assert code_input is not None
     assert gr.attempt_number == 2
     assert spec.items["optimizer"].status == "SUPPORTED"
     assert spec.items["optimizer"].value == "Adam found"
@@ -202,7 +210,7 @@ def test_no_infinite_loop(spec_agent, guardrail, session_id):
     # The agent returns insufficient evidence for everything.
     agent = create_mock_research_agent({})
     
-    spec, gr = run_research_to_spec_workflow(
+    code_input, spec, gr = run_research_to_spec_workflow(
         session_id=session_id,
         task_description="Task",
         research_agent=agent,
@@ -212,8 +220,8 @@ def test_no_infinite_loop(spec_agent, guardrail, session_id):
     
     # Assert terminated exactly at max attempts
     assert gr.attempt_number == 3
+    assert gr.status == "EVIDENCE_UNRESOLVED"
     assert gr.passed is False
-    assert gr.revision_required is False
 
 
 def test_session_isolation(spec_agent, guardrail):
@@ -225,3 +233,38 @@ def test_session_isolation(spec_agent, guardrail):
     
     for call_args in agent.run.call_args_list:
         assert call_args.kwargs["session_id"] == "sess-1"
+
+
+def test_integration_pipeline(tmp_path):
+    """Test full integration from raw PDF bytes through to VERIFIED CodeGenerationInput."""
+    from tests.test_research_agent import make_agent, pdf_bytes
+    
+    rag, research_agent = make_agent(tmp_path)
+    session_id = rag.create_session()
+    
+    # Supply dummy content for all ML_DOMAINS to trigger "found" state
+    content = "The alpha algorithm uses beta architecture. " \
+              "inputs are datasets. outputs are predictions. " \
+              "loss_function is MSE. optimizer is Adam. " \
+              "learning_rate is 0.01. evaluation_metrics is accuracy."
+              
+    rag.add_documents(session_id, [("paper.pdf", pdf_bytes([content]))])
+    
+    spec_agent = SpecificationAgent()
+    guardrail = EvidenceGuardrail(max_attempts=3)
+    
+    code_input, spec, gr = run_research_to_spec_workflow(
+        session_id=session_id,
+        task_description="alpha dataset methodology",
+        research_agent=research_agent,
+        spec_agent=spec_agent,
+        guardrail=guardrail
+    )
+    
+    assert gr.status == "VERIFIED"
+    assert code_input is not None
+    assert code_input.session_id == session_id
+    assert "paper.pdf" in code_input.source_documents
+    
+    assert spec.items["optimizer"].status == "SUPPORTED"
+    assert spec.items["learning_rate"].status == "SUPPORTED"

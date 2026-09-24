@@ -68,3 +68,46 @@ Each research session has its own temporary, isolated knowledge base. Only docum
 
 *   **Session State Drift:** If the Streamlit UI tab is refreshed or closed without explicitly deleting the session, the browser loses track of the `session_id`. To prevent orphaned data from accumulating on disk, the system now implements an automatic Time-To-Live (TTL) cleanup. Any session older than 24 hours is automatically swept and deleted when new sessions are created.
 *   **Storage Backend:** The system currently relies on local filesystem storage (`data/sessions/`). This is ideal for the local Python execution of this MCA project demo. However, if deployed to a hosted cloud environment with multiple concurrent users or scaled horizontally, the storage layer must be abstracted to use a cloud object store (e.g., AWS S3 or Google Cloud Storage) rather than local directories.
+
+## P3 - ML Specification Agent & Active Evidence Guardrail
+
+P3 adds the ML Specification Agent and Active Evidence Guardrail components, transitioning the project focus explicitly to **machine-learning research papers**.
+
+### ML-Paper Domain Scope
+The system is intentionally constrained to generating specifications grounded *only* in ML research (e.g. architectures, optimizers, learning rates, evaluation metrics). It avoids generic or arbitrary software domains.
+
+### Active Evidence Guardrail
+Before any downstream code generation occurs, the generated ML specification is subjected to an **Active Evidence Guardrail**. The guardrail determines if each requirement is supported by actual evidence retrieved from the user's uploaded paper(s) in the active session.
+
+### Bounded Revision & Hallucination Control
+If the Guardrail detects missing or unsupported items (such as hallucinated ML defaults like `optimizer = Adam` when not specified in the text), the system executes targeted corrective retrieval against the session's RAG index.
+- **Targeted Evidence Retrieval**: Broad queries are replaced with targeted searches for the missing requirement.
+- **Bounded Reconsideration**: The Specification Agent revises the spec and the Guardrail re-checks it. This loop has a hard limit (e.g., `MAX_ATTEMPTS = 3`).
+- **Hallucination-Control Principle**: The system will not silently insert common ML assumptions into the final specification.
+
+### Terminal Unresolved State
+If evidence remains unavailable after the bounded attempts, the requirement is explicitly marked as `UNSUPPORTED` or `MISSING`, and the guardrail fails (`EVIDENCE_UNRESOLVED`). The UI surfaces this failure cleanly instead of allowing a code generator to invent missing pieces.
+
+### Session Isolation
+All evidence retrieval for the ML Specification Agent and Evidence Guardrail strictly uses the `session_id`. No global knowledge base is accessed, preventing contamination between distinct user research sessions.
+
+## P4 - Verified ML Specification Pipeline and Code Generation Handoff
+
+P4 solidifies the boundary between the research/verification stage and the future code generation stage. The objective is to produce a strict, verified contract that prevents the downstream Coding Agent from receiving unverified or hallucinated ML parameters.
+
+### `VerifiedMLSpecification` Contract
+The pipeline output is wrapped in a final `CodeGenerationInput` data contract. This object strictly contains:
+- The `session_id` used for grounding.
+- The `VerifiedMLSpecification` containing only `SUPPORTED` claims with attached exact `EvidenceLink` metadata.
+- An aggregation of `source_documents` that contributed to the final specification.
+
+### Integration and Guardrail States
+The Evidence Guardrail has been formalized with explicit status enumerations (`VERIFIED`, `EVIDENCE_UNRESOLVED`, `REQUIRES_RETRIEVAL`) to prevent boolean ambiguity. The central orchestrator `run_research_to_spec_workflow` only returns a valid `CodeGenerationInput` contract if the Guardrail reaches `VERIFIED` status.
+
+### UI Progression Tracker
+The Streamlit interface now includes a pipeline progression tracker, making the workflow visually explicit:
+- Research Agent ✓
+- ML Specification ✓
+- Evidence Verification ✓ (or ✗ EVIDENCE UNRESOLVED)
+- Code Generation ○ (Next Phase)
+- Testing ○ (Next Phase)
